@@ -164,3 +164,7 @@ export function resetDb(): DatabaseSchema {
   saveDb(DEFAULT_DB);
   return DEFAULT_DB;
 }
+
+export { findBookByAnyCode } from "./bookMatcher";
+
+

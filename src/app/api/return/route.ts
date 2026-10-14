@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
-import { getDb, saveDb, HistoryRecord } from "@/lib/db";
+import { getDb, saveDb, HistoryRecord, findBookByAnyCode } from "@/lib/db";
 
 export async function POST(req: Request) {
   try {
     const { bookId, recordId } = await req.json();
     const db = getDb();
 
-    // Find the book
-    const book = db.books.find(
-      (b) => b.id === bookId || b.id === bookId?.replace("B-000", "B-0") || b.id === bookId?.replace("B-0", "B-000")
-    );
+    // Find the book with flexible multi-attribute lookup
+    const book = findBookByAnyCode(db.books, bookId);
 
     if (book) {
       book.available = true;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getDb, saveDb, BorrowRecord } from "@/lib/db";
+import { getDb, saveDb, BorrowRecord, findBookByAnyCode } from "@/lib/db";
+import { BookItem } from "@/data/initialBooks";
 
 export async function GET() {
   const db = getDb();
@@ -8,19 +9,46 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const { bookId, userId, userName } = await req.json();
+    const { bookId, userId, userName, autoAdd } = await req.json();
     const db = getDb();
 
-    // Find the book (support normalizing B-001 vs B-0001)
-    const book = db.books.find(
-      (b) => b.id === bookId || b.id === bookId?.replace("B-000", "B-0") || b.id === bookId?.replace("B-0", "B-000")
-    );
+    // 1. Find book using robust multi-attribute lookup
+    let book = findBookByAnyCode(db.books, bookId);
 
-    if (!book) {
-      return NextResponse.json({ success: false, message: `ไม่พบข้อมูลหนังสือรหัส: ${bookId}` }, { status: 404 });
+    // 2. If not found, check if autoAdd was requested or if it's a real book barcode to register
+    if (!book && autoAdd) {
+      const cleanId = String(bookId || "").trim();
+      const generatedId = cleanId.toUpperCase().startsWith("B-") 
+        ? cleanId.toUpperCase() 
+        : `B-${String(db.books.length + 1).padStart(3, "0")}`;
+
+      const newBook: BookItem = {
+        id: generatedId,
+        title: cleanId.startsWith("978") ? `หนังสือรหัส ISBN: ${cleanId}` : `หนังสือรหัส ${cleanId}`,
+        author: "ไม่ระบุผู้แต่ง",
+        isbn: cleanId,
+        pages: 200,
+        categoryId: "other",
+        category: "ทั่วไป",
+        image: "/cover_academic.jpg",
+        status: "ถูกยืม",
+        available: false
+      };
+
+      db.books.unshift(newBook);
+      book = newBook;
     }
 
-    if (!book.available) {
+    if (!book) {
+      return NextResponse.json({ 
+        success: false, 
+        canAutoAdd: true,
+        scannedCode: bookId,
+        message: `ไม่พบข้อมูลหนังสือรหัส: ${bookId}` 
+      }, { status: 404 });
+    }
+
+    if (!book.available && !autoAdd) {
       return NextResponse.json({ success: false, message: `หนังสือ "${book.title}" กำลังถูกยืมอยู่` }, { status: 400 });
     }
 

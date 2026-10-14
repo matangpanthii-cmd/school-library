@@ -17,15 +17,19 @@ import {
   Search, 
   VideoOff, 
   Upload,
-  SwitchCamera
+  SwitchCamera,
+  Plus
 } from "lucide-react";
 import Link from "next/link";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { INITIAL_BOOKS, BookItem as Book } from "@/data/initialBooks";
+import { findBookByAnyCode } from "@/lib/bookMatcher";
 
 function ScanContent() {
   const [scanStatus, setScanStatus] = useState<"scanning" | "processing" | "success" | "error">("scanning");
   const [statusMessage, setStatusMessage] = useState("");
+  const [lastScannedCode, setLastScannedCode] = useState("");
+  const [canAutoAdd, setCanAutoAdd] = useState(false);
   const [borrowedBook, setBorrowedBook] = useState<Book | null>(null);
   const [dueDateText, setDueDateText] = useState("");
 
@@ -116,11 +120,12 @@ function ScanContent() {
     return clean.toUpperCase();
   };
 
-  const processBarcode = async (code: string) => {
+  const processBarcode = async (code: string, isAutoAdd = false) => {
     if (scanStatus === "processing") return;
     const cleanCode = extractBookCode(code);
     if (!cleanCode) return;
 
+    setLastScannedCode(cleanCode);
     setScanStatus("processing");
     await stopCamera();
 
@@ -128,7 +133,7 @@ function ScanContent() {
       const res = await fetch("/api/borrow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookId: cleanCode }),
+        body: JSON.stringify({ bookId: cleanCode, autoAdd: isAutoAdd }),
       });
       const data = await res.json();
 
@@ -136,32 +141,53 @@ function ScanContent() {
         setBorrowedBook(data.book);
         setDueDateText(getThaiDueDate());
         setScanStatus("success");
+        setCanAutoAdd(false);
         await loadLibraryBooks();
         return;
       } else {
-        setStatusMessage(data.message || `ไม่สามารถยืมหนังสือรหัส "${cleanCode}" ได้`);
+        setStatusMessage(data.message || `ไม่พบหนังสือรหัส "${cleanCode}" ในระบบห้องสมุด`);
+        setCanAutoAdd(Boolean(data.canAutoAdd || isAutoAdd));
         setScanStatus("error");
         return;
       }
     } catch (apiErr) {
       console.warn("API request failed, falling back to local simulation:", apiErr);
       const allBooks = await loadLibraryBooks();
-      const target = allBooks.find((b: Book) => b.id.toUpperCase() === cleanCode || b.id.replace("-0", "-00").toUpperCase() === cleanCode);
+      let target = findBookByAnyCode(allBooks, cleanCode);
+
+      if (!target && isAutoAdd) {
+        const newBook: Book = {
+          id: cleanCode.startsWith("B-") ? cleanCode : `B-${cleanCode.slice(-6)}`,
+          title: cleanCode.startsWith("978") ? `หนังสือรหัส ISBN: ${cleanCode}` : `หนังสือรหัส ${cleanCode}`,
+          author: "บาร์โค้ด / นำเข้าใหม่",
+          isbn: cleanCode,
+          pages: 180,
+          categoryId: "other",
+          category: "ทั่วไป",
+          image: "/cover_academic.jpg",
+          status: "ถูกยืม",
+          available: false
+        };
+        allBooks.unshift(newBook);
+        target = newBook;
+      }
 
       if (!target) {
-        setStatusMessage(`ไม่พบหนังสือรหัส "${cleanCode}" ในระบบห้องสมุด`);
+        setStatusMessage(`ไม่พบข้อมูลหนังสือรหัส "${cleanCode}" ในคลัง`);
+        setCanAutoAdd(true);
         setScanStatus("error");
         return;
       }
 
-      if (!target.available) {
-        setStatusMessage(`หนังสือ "${target.title}" (รหัส: ${target.id}) ถูกยืมไปแล้ว`);
+      if (!target.available && !isAutoAdd) {
+        setStatusMessage(`หนังสือ "${target.title}" (รหัส: ${target.id}) กำลังถูกยืมอยู่`);
+        setCanAutoAdd(false);
         setScanStatus("error");
         return;
       }
 
       const updated = allBooks.map((b: Book) =>
-        b.id === target.id ? { ...b, available: false, status: "ถูกยืม" } : b
+        b.id === target!.id ? { ...b, available: false, status: "ถูกยืม" } : b
       );
 
       try {
@@ -171,6 +197,7 @@ function ScanContent() {
       setBorrowedBook(target);
       setDueDateText(getThaiDueDate());
       setScanStatus("success");
+      setCanAutoAdd(false);
     }
   };
 
@@ -492,19 +519,51 @@ function ScanContent() {
 
           {/* ERROR STATE */}
           {scanStatus === "error" && (
-            <div className="absolute inset-0 bg-rose-600 z-30 flex flex-col items-center justify-center p-6 text-center text-white animate-[fadeIn_0.3s_ease-out]">
-              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-3">
-                <AlertCircle className="w-8 h-8 text-white" />
+            <div className="absolute inset-0 bg-slate-900/95 z-30 flex flex-col items-center justify-center p-6 text-center text-white animate-[fadeIn_0.3s_ease-out]">
+              <div className="w-14 h-14 bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-full flex items-center justify-center mb-3">
+                <AlertCircle className="w-8 h-8" />
               </div>
-              <h3 className="text-xl font-black mb-1">ไม่สามารถทำรายการได้</h3>
-              <p className="text-rose-100 text-xs sm:text-sm mb-5 max-w-sm">{statusMessage}</p>
 
-              <button 
-                onClick={resetScan}
-                className="px-6 py-2.5 bg-white text-rose-700 font-bold text-xs rounded-xl hover:bg-rose-50 transition-colors shadow-sm cursor-pointer"
-              >
-                ลองใหม่อีกครั้ง
-              </button>
+              <h3 className="text-xl font-black mb-1 text-white">ผลการสแกนหนังสือ</h3>
+              
+              {/* Detected Scanned Code Badge */}
+              {lastScannedCode && (
+                <div className="bg-slate-800 border border-slate-700 px-3.5 py-1.5 rounded-xl font-mono text-xs text-sky-300 my-2 inline-flex items-center gap-1.5">
+                  <ScanLine className="w-3.5 h-3.5" />
+                  <span>รหัสที่สแกนได้: <strong className="text-white">{lastScannedCode}</strong></span>
+                </div>
+              )}
+
+              <p className="text-slate-300 text-xs sm:text-sm mb-5 max-w-sm">{statusMessage}</p>
+
+              {/* 1-Click Auto Register Button if Book is Not Yet in System */}
+              {canAutoAdd && lastScannedCode && (
+                <button
+                  onClick={() => processBarcode(lastScannedCode, true)}
+                  className="w-full max-w-xs py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-500/30 transition-all flex items-center justify-center gap-2 cursor-pointer mb-2.5 active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>ลงทะเบียนเล่มนี้ & ยืมทันที</span>
+                </button>
+              )}
+
+              <div className="flex gap-2.5 w-full max-w-xs">
+                <button 
+                  onClick={resetScan}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition-colors border border-slate-700 shadow-sm cursor-pointer"
+                >
+                  ลองสแกนใหม่
+                </button>
+                <button 
+                  onClick={() => {
+                    resetScan();
+                    setIsManualModalOpen(true);
+                  }}
+                  className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs rounded-xl transition-colors shadow-sm cursor-pointer"
+                >
+                  เลือกจากคลัง
+                </button>
+              </div>
             </div>
           )}
 
