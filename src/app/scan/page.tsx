@@ -255,65 +255,107 @@ function ScanContent() {
     }
   };
 
+  const startingRef = useRef(false);
+
+  // Release all hardware MediaStream tracks directly from the DOM
+  const releaseMediaStreams = () => {
+    if (typeof document === "undefined") return;
+    const container = document.getElementById("interactive-scanner");
+    if (container) {
+      const videos = container.getElementsByTagName("video");
+      for (let i = 0; i < videos.length; i++) {
+        const video = videos[i];
+        if (video.srcObject) {
+          try {
+            const stream = video.srcObject as MediaStream;
+            stream.getTracks().forEach((track) => track.stop());
+          } catch (e) {}
+          video.srcObject = null;
+        }
+      }
+      container.innerHTML = "";
+    }
+  };
+
+  // Stop and completely destroy camera scanner instance
+  const stopCamera = async () => {
+    if (html5QrCodeRef.current) {
+      const scanner = html5QrCodeRef.current;
+      html5QrCodeRef.current = null;
+      try {
+        if (scanner.isScanning) {
+          await scanner.stop();
+        }
+      } catch (e) {
+        console.warn("Stop scanner error:", e);
+      }
+      try {
+        scanner.clear();
+      } catch (e) {}
+    }
+
+    // Force release any video element stream tracks
+    releaseMediaStreams();
+    setIsCameraActive(false);
+  };
+
   // Robust Camera Start with Direct Back Camera Priority
-  const startCamera = async (overrideConfig?: any) => {
-    setCameraError(null);
+  const startCamera = async (overrideFacing?: "environment" | "user") => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setIsStartingCamera(true);
+    setCameraError(null);
+
+    // Clear any previous error/success overlay so camera viewfinder is visible
+    setScanStatus("scanning");
+    setBorrowedBook(null);
+    setStatusMessage("");
+
+    // 1. Ensure any previous instance and stream tracks are stopped
+    await stopCamera();
+
+    // Give browser hardware a brief moment to reset the sensor
+    await new Promise((r) => setTimeout(r, 150));
+
+    // 3. Determine target facing mode (defaults to environment/back)
+    const targetFacing = overrideFacing || facingMode;
+    setFacingMode(targetFacing);
 
     try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("interactive-scanner", {
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8,
-            Html5QrcodeSupportedFormats.QR_CODE,
-            Html5QrcodeSupportedFormats.UPC_A,
-            Html5QrcodeSupportedFormats.CODE_39
-          ],
-          verbose: false
-        });
+      const container = document.getElementById("interactive-scanner");
+      if (!container) {
+        throw new Error("Scanner container element not found in DOM");
       }
+      container.innerHTML = "";
 
-      const qrCode = html5QrCodeRef.current;
-      if (qrCode.isScanning) {
-        await qrCode.stop();
-      }
+      // 2. Create fresh Html5Qrcode instance
+      const scanner = new Html5Qrcode("interactive-scanner", {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.CODE_39
+        ],
+        verbose: false
+      });
+      html5QrCodeRef.current = scanner;
 
-      // Query available cameras
-      let detectedCameras: { id: string; label: string }[] = [];
-      try {
-        detectedCameras = await Html5Qrcode.getCameras();
-        if (detectedCameras && detectedCameras.length > 0) {
-          setCameraList(detectedCameras);
-        }
-      } catch (camListErr) {
-        console.warn("Could not list cameras:", camListErr);
-      }
+      const qrboxCalc = (viewfinderWidth: number, viewfinderHeight: number) => {
+        const minDim = Math.min(viewfinderWidth, viewfinderHeight);
+        const size = Math.max(Math.floor(minDim * 0.72), 160);
+        return { 
+          width: Math.min(size, viewfinderWidth || 250), 
+          height: Math.min(size, viewfinderHeight || 250) 
+        };
+      };
 
-      // Determine target camera configuration
-      // Standard W3C facingMode constraint for rear camera is { facingMode: "environment" }
-      let targetConfig: any = overrideConfig;
-      if (!targetConfig) {
-        if (selectedCameraId) {
-          targetConfig = selectedCameraId;
-        } else if (facingMode === "environment") {
-          // Standard W3C constraint for rear autofocus camera
-          targetConfig = { facingMode: "environment" };
-        } else {
-          targetConfig = { facingMode: "user" };
-        }
-      }
-
-      await qrCode.start(
-        targetConfig,
+      await scanner.start(
+        { facingMode: targetFacing },
         {
           fps: 15,
-          qrbox: (viewfinderWidth, viewfinderHeight) => {
-            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-            const edge = Math.floor(minEdge * 0.72);
-            return { width: Math.max(edge, 220), height: Math.max(edge, 220) };
-          },
+          qrbox: qrboxCalc,
         },
         (decodedText) => {
           if (decodedText) {
@@ -324,137 +366,14 @@ function ScanContent() {
       );
 
       setIsCameraActive(true);
-
-      // Once permission is granted, camera labels become visible - refresh camera list
-      try {
-        const refreshed = await Html5Qrcode.getCameras();
-        if (refreshed && refreshed.length > 0) {
-          setCameraList(refreshed);
-        }
-      } catch (e) {}
-
     } catch (err: any) {
-      console.warn("Primary camera start failed, attempting fallbacks:", err);
+      console.warn("Primary camera start failed, trying fallback:", err);
 
-      // Fallback 1: Try standard { facingMode: "environment" }
+      // Fallback 1: If environment facing fails, try user facing (webcam or front lens)
       try {
-        if (html5QrCodeRef.current) {
-          await html5QrCodeRef.current.start(
-            { facingMode: "environment" },
-            { fps: 12, qrbox: { width: 220, height: 220 } },
-            (decodedText) => {
-              if (decodedText) processBarcode(decodedText);
-            },
-            () => {}
-          );
-          setIsCameraActive(true);
-          setFacingMode("environment");
-          return;
-        }
-      } catch (e1) {
-        console.warn("Environment fallback failed:", e1);
-      }
+        releaseMediaStreams();
 
-      // Fallback 2: Try any camera (e.g. laptop webcam)
-      try {
-        if (html5QrCodeRef.current) {
-          await html5QrCodeRef.current.start(
-            { facingMode: "user" },
-            { fps: 10, qrbox: { width: 220, height: 220 } },
-            (decodedText) => {
-              if (decodedText) processBarcode(decodedText);
-            },
-            () => {}
-          );
-          setIsCameraActive(true);
-          setFacingMode("user");
-          return;
-        }
-      } catch (fallbackErr: any) {
-        console.error("All camera start attempts failed:", fallbackErr);
-        setIsCameraActive(false);
-
-        const isLocalhost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-        if (typeof window !== "undefined" && !window.isSecureContext && !isLocalhost) {
-          setCameraError("เบราว์เซอร์จำกัดการเปิดกล้องผ่าน HTTP ครับ กรุณาเข้าใช้งานผ่าน HTTPS (เช่น ลิงก์ Vercel) หรือกด 'ถ่ายภาพ / อัปโหลด' ด้านล่างได้เลยครับ");
-        } else {
-          setCameraError("ไม่สามารถเปิดกล้องได้ กรุณาตรวจสอบว่าได้กดยินยอมให้เบราว์เซอร์เข้าถึงกล้องแล้ว หรือกด 'ถ่ายภาพ / อัปโหลด' หรือ 'พิมพ์รหัสเอง' ด้านล่างได้ทันทีครับ");
-        }
-      }
-    } finally {
-      setIsStartingCamera(false);
-    }
-  };
-
-  const stopCamera = async () => {
-    try {
-      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        await html5QrCodeRef.current.stop();
-      }
-    } catch (e) {
-      console.warn("Stop camera warning:", e);
-    }
-    setIsCameraActive(false);
-  };
-
-  const toggleCamera = async () => {
-    if (isStartingCamera) return;
-
-    await stopCamera();
-
-    const nextFacing: "environment" | "user" = facingMode === "environment" ? "user" : "environment";
-    setFacingMode(nextFacing);
-
-    let targetConfig: any = { facingMode: nextFacing };
-    if (cameraList.length > 1) {
-      if (nextFacing === "environment") {
-        const back = cameraList.find((c) => {
-          const l = (c.label || "").toLowerCase();
-          return l.includes("back") || l.includes("rear") || l.includes("environment") || l.includes("หลัง");
-        });
-        if (back) {
-          targetConfig = back.id;
-          setSelectedCameraId(back.id);
-        } else {
-          setSelectedCameraId(null);
-        }
-      } else {
-        const front = cameraList.find((c) => {
-          const l = (c.label || "").toLowerCase();
-          return l.includes("front") || l.includes("user") || l.includes("หน้า");
-        });
-        if (front) {
-          targetConfig = front.id;
-          setSelectedCameraId(front.id);
-        } else {
-          setSelectedCameraId(null);
-        }
-      }
-    } else {
-      setSelectedCameraId(null);
-    }
-
-    setTimeout(() => {
-      startCamera(targetConfig);
-    }, 250);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        html5QrCodeRef.current.stop().catch(() => {});
-      }
-    };
-  }, []);
-
-  const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setScanStatus("processing");
-    try {
-      if (!html5QrCodeRef.current) {
-        html5QrCodeRef.current = new Html5Qrcode("interactive-scanner", {
+        const fallbackScanner = new Html5Qrcode("interactive-scanner", {
           formatsToSupport: [
             Html5QrcodeSupportedFormats.CODE_128,
             Html5QrcodeSupportedFormats.EAN_13,
@@ -465,9 +384,83 @@ function ScanContent() {
           ],
           verbose: false
         });
-      }
+        html5QrCodeRef.current = fallbackScanner;
 
-      const decodedText = await html5QrCodeRef.current.scanFile(file, true);
+        const fallbackFacing = targetFacing === "environment" ? "user" : "environment";
+        await fallbackScanner.start(
+          { facingMode: fallbackFacing },
+          { 
+            fps: 12, 
+            qrbox: (w, h) => {
+              const minDim = Math.min(w, h);
+              const size = Math.max(Math.floor(minDim * 0.7), 150);
+              return { width: Math.min(size, w || 220), height: Math.min(size, h || 220) };
+            }
+          },
+          (decodedText) => {
+            if (decodedText) processBarcode(decodedText);
+          },
+          () => {}
+        );
+        setIsCameraActive(true);
+        setFacingMode(fallbackFacing);
+        return;
+      } catch (fallbackErr: any) {
+        console.error("All camera start attempts failed:", fallbackErr);
+        await stopCamera();
+
+        const isLocalhost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+        const isSecure = typeof window !== "undefined" && window.isSecureContext;
+
+        if (!isSecure && !isLocalhost) {
+          setCameraError("เบราว์เซอร์ไม่อนุญาตให้เปิดกล้องผ่าน HTTP ครับ กรุณาเข้าใช้งานผ่าน HTTPS (เช่น ลิงก์ Vercel https://...) หรือใช้ปุ่ม 'ถ่ายภาพ / อัปโหลด' ด้านล่างได้ทันทีครับ");
+        } else if (fallbackErr?.name === "NotAllowedError" || String(fallbackErr).includes("Permission")) {
+          setCameraError("เบราว์เซอร์ยังไม่ได้รับอนุญาตให้ใช้กล้อง กรุณากดไอคอนแม่กุญแจ 🔒 ที่แถบ URL ด้านบน แล้วเลือก 'อนุญาตกล้อง' (Allow Camera) หรือใช้ปุ่ม 'ถ่ายภาพ / อัปโหลด' ได้ทันทีครับ");
+        } else {
+          setCameraError("ไม่สามารถเชื่อมต่อกล้องได้ในขณะนี้ กรุณากดปุ่ม 'เปิดกล้องสด' ใหม่อีกครั้ง หรือใช้ปุ่ม 'ถ่ายภาพ / อัปโหลด' เพื่อถ่ายภาพบาร์โค้ดได้ทันทีครับ");
+        }
+      }
+    } finally {
+      startingRef.current = false;
+      setIsStartingCamera(false);
+    }
+  };
+
+  const toggleCamera = async () => {
+    if (startingRef.current) return;
+    const nextFacing: "environment" | "user" = facingMode === "environment" ? "user" : "environment";
+    await startCamera(nextFacing);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera().catch(() => {});
+    };
+  }, []);
+
+  const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setScanStatus("processing");
+    await stopCamera();
+
+    try {
+      const fileScanner = new Html5Qrcode("interactive-scanner", {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.CODE_39
+        ],
+        verbose: false
+      });
+
+      const decodedText = await fileScanner.scanFile(file, false);
+      try { fileScanner.clear(); } catch (e) {}
+
       if (decodedText) {
         processBarcode(decodedText);
       } else {
@@ -483,10 +476,13 @@ function ScanContent() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const resetScan = () => {
+  const resetScan = (autoStartCamera: boolean = false) => {
     setScanStatus("scanning");
     setBorrowedBook(null);
     setStatusMessage("");
+    if (autoStartCamera) {
+      startCamera("environment");
+    }
   };
 
   return (
@@ -554,7 +550,7 @@ function ScanContent() {
             <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-blue-950 z-10 flex flex-col items-center justify-center p-6 text-center">
               
               <button
-                onClick={startCamera}
+                onClick={() => startCamera()}
                 disabled={isStartingCamera}
                 className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-sky-500 hover:bg-sky-400 text-white flex flex-col items-center justify-center shadow-lg shadow-sky-500/30 hover:scale-105 active:scale-95 transition-all cursor-pointer group mb-4"
               >
@@ -662,7 +658,7 @@ function ScanContent() {
 
               <div className="flex gap-3 w-full max-w-sm mt-5">
                 <button 
-                  onClick={resetScan}
+                  onClick={() => resetScan(true)}
                   className="flex-1 py-2.5 bg-white text-emerald-800 font-bold text-xs rounded-xl hover:bg-emerald-50 transition-colors shadow-sm cursor-pointer"
                 >
                   สแกนเล่มต่อไป
@@ -710,14 +706,14 @@ function ScanContent() {
 
               <div className="flex gap-2.5 w-full max-w-xs">
                 <button 
-                  onClick={resetScan}
+                  onClick={() => resetScan(true)}
                   className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition-colors border border-slate-700 shadow-sm cursor-pointer"
                 >
                   ลองสแกนใหม่
                 </button>
                 <button 
                   onClick={() => {
-                    resetScan();
+                    resetScan(false);
                     setIsManualModalOpen(true);
                   }}
                   className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs rounded-xl transition-colors shadow-sm cursor-pointer"
