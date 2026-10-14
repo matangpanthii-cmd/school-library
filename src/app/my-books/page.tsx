@@ -36,47 +36,56 @@ export default function MyBooksPage() {
 
   useEffect(() => {
     const fetchBorrowed = async () => {
+      let serverBorrowed: BorrowedBookItem[] | null = null;
+      let serverHistory: BorrowedBookItem[] | null = null;
+
       try {
-        const res = await fetch("/api/borrow");
+        const res = await fetch("/api/borrow", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
           if (data.borrowed && Array.isArray(data.borrowed)) {
-            setActiveBooks(data.borrowed);
-            try {
-              localStorage.setItem("my_borrowed_books", JSON.stringify(data.borrowed));
-            } catch (e) {}
+            serverBorrowed = data.borrowed;
           }
           if (data.history && Array.isArray(data.history)) {
-            setHistoryBooks(data.history);
-            try {
-              localStorage.setItem("my_borrowed_history", JSON.stringify(data.history));
-            } catch (e) {}
+            serverHistory = data.history;
           }
-          return;
         }
       } catch (err) {
         console.warn("Could not fetch /api/borrow, using local fallback");
       }
+
+      // Merge local borrowed records so items borrowed in this session are retained
+      let mergedBorrowed = serverBorrowed || DEFAULT_ACTIVE_BOOKS;
+      let mergedHistory = serverHistory || DEFAULT_HISTORY_BOOKS;
 
       try {
         const saved = localStorage.getItem("my_borrowed_books");
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setActiveBooks(parsed);
+            const existingIds = new Set(mergedBorrowed.map((b: any) => String(b.bookId || b.id)));
+            const newLocals = parsed.filter((b: any) => !existingIds.has(String(b.bookId || b.id)));
+            mergedBorrowed = [...newLocals, ...mergedBorrowed];
           }
         }
+        localStorage.setItem("my_borrowed_books", JSON.stringify(mergedBorrowed));
 
         const savedHist = localStorage.getItem("my_borrowed_history");
         if (savedHist) {
           const parsedHist = JSON.parse(savedHist);
           if (Array.isArray(parsedHist) && parsedHist.length > 0) {
-            setHistoryBooks(parsedHist);
+            const existingHistIds = new Set(mergedHistory.map((b: any) => String(b.id)));
+            const newHistLocals = parsedHist.filter((b: any) => !existingHistIds.has(String(b.id)));
+            mergedHistory = [...newHistLocals, ...mergedHistory];
           }
         }
+        localStorage.setItem("my_borrowed_history", JSON.stringify(mergedHistory));
       } catch (e) {
         console.error(e);
       }
+
+      setActiveBooks(mergedBorrowed);
+      setHistoryBooks(mergedHistory);
     };
     fetchBorrowed();
   }, []);
@@ -88,11 +97,13 @@ export default function MyBooksPage() {
 
   const handleReturnBook = async (book: BorrowedBookItem) => {
     if (confirm(`คุณต้องการคืนหนังสือ "${book.title}" ใช่หรือไม่?`)) {
+      const bookIdentifier = (book as any).bookId || book.id;
+
       try {
         await fetch("/api/return", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ bookId: book.id, recordId: book.id }),
+          body: JSON.stringify({ bookId: bookIdentifier, recordId: book.id }),
         });
       } catch (err) {
         console.warn("API return error:", err);
@@ -119,7 +130,7 @@ export default function MyBooksPage() {
           const parsedCatalog = JSON.parse(savedCatalog);
           if (Array.isArray(parsedCatalog)) {
             const updatedCatalog = parsedCatalog.map((item: any) => {
-              if (item.id === book.id || item.title === book.title) {
+              if (item.id === bookIdentifier || item.id === book.id || item.title === book.title) {
                 return { ...item, available: true, status: "ว่าง" };
               }
               return item;

@@ -2,9 +2,18 @@ import { NextResponse } from "next/server";
 import { getDb, saveDb } from "@/lib/db";
 import { BookItem } from "@/data/initialBooks";
 
-export async function GET() {
+export async function GET(req: Request) {
   const db = getDb();
-  return NextResponse.json({ success: true, books: db.books });
+  return NextResponse.json(
+    { success: true, books: db.books },
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    }
+  );
 }
 
 export async function POST(req: Request) {

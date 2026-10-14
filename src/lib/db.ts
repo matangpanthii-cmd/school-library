@@ -49,6 +49,7 @@ export interface DatabaseSchema {
 
 const DB_DIR = path.join(process.cwd(), "data");
 const DB_FILE = path.join(DB_DIR, "library_db.json");
+const TMP_FILE = path.join(process.platform === "win32" ? DB_DIR : "/tmp", "library_db_active.json");
 
 const DEFAULT_DB: DatabaseSchema = {
   books: INITIAL_BOOKS,
@@ -130,39 +131,80 @@ const DEFAULT_DB: DatabaseSchema = {
   ]
 };
 
+declare global {
+  // eslint-disable-next-line no-var
+  var _globalLibraryDb: DatabaseSchema | undefined;
+}
+
 export function getDb(): DatabaseSchema {
+  if (globalThis._globalLibraryDb) {
+    return globalThis._globalLibraryDb;
+  }
+
+  // 1. Try reading from TMP_FILE (for serverless environments where /tmp is writable)
+  try {
+    if (fs.existsSync(TMP_FILE)) {
+      const data = fs.readFileSync(TMP_FILE, "utf-8");
+      const parsed = JSON.parse(data);
+      if (parsed && Array.isArray(parsed.books) && parsed.books.length > 0) {
+        globalThis._globalLibraryDb = parsed;
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  // 2. Try reading from primary DB_FILE
   try {
     if (!fs.existsSync(DB_DIR)) {
-      fs.mkdirSync(DB_DIR, { recursive: true });
+      try { fs.mkdirSync(DB_DIR, { recursive: true }); } catch (e) {}
     }
-    if (!fs.existsSync(DB_FILE)) {
-      fs.writeFileSync(DB_FILE, JSON.stringify(DEFAULT_DB, null, 2), "utf-8");
-      return DEFAULT_DB;
+    if (fs.existsSync(DB_FILE)) {
+      const data = fs.readFileSync(DB_FILE, "utf-8");
+      const parsed = JSON.parse(data);
+      if (parsed && Array.isArray(parsed.books) && parsed.books.length > 0) {
+        globalThis._globalLibraryDb = parsed;
+        return parsed;
+      }
     }
-    const data = fs.readFileSync(DB_FILE, "utf-8");
-    return JSON.parse(data);
   } catch (err) {
-    console.error("Error reading database file:", err);
-    return DEFAULT_DB;
+    console.warn("Could not read DB_FILE, using memory fallback:", err);
   }
+
+  const initial = JSON.parse(JSON.stringify(DEFAULT_DB));
+  globalThis._globalLibraryDb = initial;
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), "utf-8");
+  } catch (e) {}
+  return initial;
 }
 
 export function saveDb(data: DatabaseSchema): boolean {
+  globalThis._globalLibraryDb = data;
+  let written = false;
+
   try {
     if (!fs.existsSync(DB_DIR)) {
-      fs.mkdirSync(DB_DIR, { recursive: true });
+      try { fs.mkdirSync(DB_DIR, { recursive: true }); } catch (e) {}
     }
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), "utf-8");
-    return true;
+    written = true;
   } catch (err) {
-    console.error("Error writing to database file:", err);
-    return false;
+    // Expected on read-only serverless filesystems like Vercel
   }
+
+  try {
+    fs.writeFileSync(TMP_FILE, JSON.stringify(data, null, 2), "utf-8");
+    written = true;
+  } catch (e) {}
+
+  return written;
 }
 
 export function resetDb(): DatabaseSchema {
-  saveDb(DEFAULT_DB);
-  return DEFAULT_DB;
+  const fresh = JSON.parse(JSON.stringify(DEFAULT_DB));
+  globalThis._globalLibraryDb = fresh;
+  saveDb(fresh);
+  return fresh;
 }
 
 export { findBookByAnyCode } from "./bookMatcher";

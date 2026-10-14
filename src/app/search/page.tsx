@@ -127,40 +127,51 @@ export default function SearchPage() {
   // Load persisted books and role from server API or localStorage on mount
   useEffect(() => {
     const fetchBooks = async () => {
+      let serverBooks: BookItem[] | null = null;
       try {
-        const res = await fetch("/api/books");
+        const res = await fetch("/api/books", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
           if (data.books && Array.isArray(data.books) && data.books.length > 0) {
-            setBooks(data.books);
-            setSelectedBook(data.books[0]);
-            try {
-              localStorage.setItem("library_books", JSON.stringify(data.books));
-            } catch (e) {}
-            return;
+            serverBooks = data.books;
           }
         }
       } catch (err) {
         console.warn("Could not fetch /api/books, falling back to local storage");
       }
 
+      let merged: BookItem[] = serverBooks || INITIAL_BOOKS;
       try {
         const savedBooks = localStorage.getItem("library_books");
         if (savedBooks) {
           const parsed = JSON.parse(savedBooks);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setBooks(parsed);
-            setSelectedBook(parsed[0]);
-          } else {
-            setSelectedBook(INITIAL_BOOKS[0]);
+            const localMap = new Map(parsed.map((b: any) => [b.id, b]));
+            merged = merged.map((b) => {
+              const local = localMap.get(b.id);
+              if (local && (!local.available || local.status === "ถูกยืม")) {
+                return { ...b, available: false, status: "ถูกยืม" };
+              }
+              return b;
+            });
+            parsed.forEach((lb: any) => {
+              if (!merged.some((b) => b.id === lb.id)) {
+                merged.unshift(lb);
+              }
+            });
           }
-        } else {
-          setSelectedBook(INITIAL_BOOKS[0]);
         }
+        localStorage.setItem("library_books", JSON.stringify(merged));
       } catch (e) {
-        console.error("Failed to load local books:", e);
-        setSelectedBook(INITIAL_BOOKS[0]);
+        console.error(e);
       }
+
+      setBooks(merged);
+      setSelectedBook((prev) => {
+        if (!prev) return merged[0] || INITIAL_BOOKS[0];
+        const refreshed = merged.find((b) => b.id === prev.id);
+        return refreshed || prev;
+      });
     };
     fetchBooks();
 
@@ -218,9 +229,35 @@ export default function SearchPage() {
       setIsBorrowing(false);
       if (data.success && data.book) {
         setBorrowSuccess(true);
-        const updated = books.map((b) => (b.id === selectedBook.id ? data.book : b));
+        const updatedBook: BookItem = {
+          ...data.book,
+          available: false,
+          status: "ถูกยืม",
+        };
+        const sourceList = Array.isArray(data.books) && data.books.length > 0 ? data.books : books;
+        const updated = sourceList.map((b: BookItem) => (b.id === selectedBook.id ? updatedBook : b));
         saveBooks(updated);
-        setSelectedBook(data.book);
+        setSelectedBook(updatedBook);
+
+        // Also add to my_borrowed_books in localStorage
+        try {
+          const today = new Date().toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+          const myDue = new Date(Date.now() + 14 * 86400000).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+          const record = data.borrowRecord || {
+            id: `bw-${Date.now()}`,
+            bookId: updatedBook.id,
+            title: updatedBook.title,
+            author: updatedBook.author,
+            borrowDate: today,
+            dueDate: myDue,
+            status: "ปกติ",
+            statusColor: "text-emerald-600 bg-emerald-50 border-emerald-200"
+          };
+          const currentBorrowed = JSON.parse(localStorage.getItem("my_borrowed_books") || "[]");
+          const filtered = currentBorrowed.filter((r: any) => r.bookId !== updatedBook.id && r.id !== record.id);
+          localStorage.setItem("my_borrowed_books", JSON.stringify([record, ...filtered]));
+        } catch (e) {}
+
         showToast(`ยืมหนังสือ "${selectedBook.title}" สำเร็จ!`, "success");
         return;
       }
@@ -232,11 +269,31 @@ export default function SearchPage() {
     setTimeout(() => {
       setIsBorrowing(false);
       setBorrowSuccess(true);
+      const updatedBook: BookItem = { ...selectedBook, available: false, status: "ถูกยืม" };
       const updated = books.map((b) =>
-        b.id === selectedBook.id ? { ...b, available: false, status: "ถูกยืม" } : b
+        b.id === selectedBook.id ? updatedBook : b
       );
       saveBooks(updated);
-      setSelectedBook({ ...selectedBook, available: false, status: "ถูกยืม" });
+      setSelectedBook(updatedBook);
+
+      try {
+        const today = new Date().toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+        const myDue = new Date(Date.now() + 14 * 86400000).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+        const record = {
+          id: `bw-${Date.now()}`,
+          bookId: updatedBook.id,
+          title: updatedBook.title,
+          author: updatedBook.author,
+          borrowDate: today,
+          dueDate: myDue,
+          status: "ปกติ",
+          statusColor: "text-emerald-600 bg-emerald-50 border-emerald-200"
+        };
+        const currentBorrowed = JSON.parse(localStorage.getItem("my_borrowed_books") || "[]");
+        const filtered = currentBorrowed.filter((r: any) => r.bookId !== updatedBook.id && r.id !== record.id);
+        localStorage.setItem("my_borrowed_books", JSON.stringify([record, ...filtered]));
+      } catch (e) {}
+
       showToast(`ยืมหนังสือ "${selectedBook.title}" สำเร็จ!`, "success");
     }, 600);
   };
@@ -841,21 +898,23 @@ export default function SearchPage() {
 
             <div className="flex flex-col gap-2.5">
               <button 
-                disabled={!selectedBook.available || isBorrowing || borrowSuccess} 
+                disabled={!selectedBook.available || selectedBook.status === "ถูกยืม" || isBorrowing || borrowSuccess} 
                 onClick={handleBorrowClick}
-                className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
                   borrowSuccess 
                     ? "bg-emerald-500 text-white shadow-sm" 
-                    : selectedBook.available 
-                      ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm" 
-                      : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                    : selectedBook.available && selectedBook.status !== "ถูกยืม"
+                      ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm cursor-pointer" 
+                      : "bg-slate-100 text-rose-500 border border-slate-200 cursor-not-allowed font-semibold"
               }`}>
                 {borrowSuccess ? (
                   <><CheckCircle2 className="w-5 h-5" /> ยืมสำเร็จ!</>
                 ) : isBorrowing ? (
                   <><RefreshCcw className="w-5 h-5 animate-spin" /> กำลังดำเนินการ...</>
-                ) : (
+                ) : selectedBook.available && selectedBook.status !== "ถูกยืม" ? (
                   <><ArrowRightLeft className="w-5 h-5" /> ยืมหนังสือเล่มนี้</>
+                ) : (
+                  <><X className="w-5 h-5 text-rose-500" /> หนังสือถูกยืมอยู่ (ไม่ว่าง)</>
                 )}
               </button>
 

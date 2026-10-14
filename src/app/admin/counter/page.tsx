@@ -60,7 +60,7 @@ export default function AdminCounterPage() {
   useEffect(() => {
     const fetchBooks = async () => {
       try {
-        const res = await fetch("/api/books");
+        const res = await fetch("/api/books", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
           if (data.books && Array.isArray(data.books)) {

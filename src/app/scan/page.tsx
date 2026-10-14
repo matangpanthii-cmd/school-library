@@ -47,37 +47,49 @@ function ScanContent() {
 
   // Load books
   const loadLibraryBooks = async (): Promise<Book[]> => {
+    let serverBooks: Book[] | null = null;
     try {
-      const res = await fetch("/api/books");
+      const res = await fetch("/api/books", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
         if (data.books && Array.isArray(data.books) && data.books.length > 0) {
-          setAvailableBooks(data.books);
-          try {
-            localStorage.setItem("library_books", JSON.stringify(data.books));
-          } catch (e) {}
-          return data.books;
+          serverBooks = data.books;
         }
       }
     } catch (e) {
       console.warn("Using local books cache:", e);
     }
 
+    // Merge server books with local storage overrides
+    let mergedBooks: Book[] = serverBooks || INITIAL_BOOKS;
     try {
       const saved = localStorage.getItem("library_books");
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setAvailableBooks(parsed);
-          return parsed;
+        const localList: Book[] = JSON.parse(saved);
+        if (Array.isArray(localList) && localList.length > 0) {
+          const localMap = new Map(localList.map((b) => [b.id, b]));
+          mergedBooks = mergedBooks.map((b) => {
+            const local = localMap.get(b.id);
+            if (local && (!local.available || local.status === "ถูกยืม")) {
+              return { ...b, available: false, status: "ถูกยืม" };
+            }
+            return b;
+          });
+          // Also include any new books added locally
+          localList.forEach((lb) => {
+            if (!mergedBooks.some((b) => b.id === lb.id)) {
+              mergedBooks.unshift(lb);
+            }
+          });
         }
       }
-      localStorage.setItem("library_books", JSON.stringify(INITIAL_BOOKS));
+      localStorage.setItem("library_books", JSON.stringify(mergedBooks));
     } catch (e) {
       console.error(e);
     }
-    setAvailableBooks(INITIAL_BOOKS);
-    return INITIAL_BOOKS;
+
+    setAvailableBooks(mergedBooks);
+    return mergedBooks;
   };
 
   useEffect(() => {
@@ -138,11 +150,49 @@ function ScanContent() {
       const data = await res.json();
 
       if (data.success && data.book) {
-        setBorrowedBook(data.book);
+        const borrowedItem: Book = {
+          ...data.book,
+          available: false,
+          status: "ถูกยืม"
+        };
+        setBorrowedBook(borrowedItem);
         setDueDateText(getThaiDueDate());
         setScanStatus("success");
         setCanAutoAdd(false);
-        await loadLibraryBooks();
+
+        // Instantly mark as borrowed in availableBooks state & localStorage
+        const sourceList = Array.isArray(data.books) && data.books.length > 0 ? data.books : availableBooks;
+        const updatedList = sourceList.map((b: Book) =>
+          b.id === borrowedItem.id || b.isbn === borrowedItem.isbn
+            ? { ...b, available: false, status: "ถูกยืม" }
+            : b
+        );
+        if (!updatedList.some((b: Book) => b.id === borrowedItem.id)) {
+          updatedList.unshift(borrowedItem);
+        }
+        setAvailableBooks(updatedList);
+
+        try {
+          localStorage.setItem("library_books", JSON.stringify(updatedList));
+
+          // Also save to my_borrowed_books in localStorage so My Books page is updated immediately
+          const today = new Date().toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+          const myDue = new Date(Date.now() + 14 * 86400000).toLocaleDateString("th-TH", { day: "2-digit", month: "short", year: "numeric" });
+          const newRecord = data.borrowRecord || {
+            id: `bw-${Date.now()}`,
+            bookId: borrowedItem.id,
+            title: borrowedItem.title,
+            author: borrowedItem.author,
+            borrowDate: today,
+            dueDate: myDue,
+            status: "ปกติ",
+            statusColor: "text-emerald-600 bg-emerald-50 border-emerald-200"
+          };
+          const currentBorrowed = JSON.parse(localStorage.getItem("my_borrowed_books") || "[]");
+          const filtered = currentBorrowed.filter((r: any) => r.bookId !== borrowedItem.id && r.id !== newRecord.id);
+          localStorage.setItem("my_borrowed_books", JSON.stringify([newRecord, ...filtered]));
+        } catch (e) {}
+
         return;
       } else {
         setStatusMessage(data.message || `ไม่พบหนังสือรหัส "${cleanCode}" ในระบบห้องสมุด`);
@@ -179,7 +229,7 @@ function ScanContent() {
         return;
       }
 
-      if (!target.available && !isAutoAdd) {
+      if ((!target.available || target.status === "ถูกยืม") && !isAutoAdd) {
         setStatusMessage(`หนังสือ "${target.title}" (รหัส: ${target.id}) กำลังถูกยืมอยู่`);
         setCanAutoAdd(false);
         setScanStatus("error");
@@ -194,7 +244,8 @@ function ScanContent() {
         localStorage.setItem("library_books", JSON.stringify(updated));
       } catch (e) {}
 
-      setBorrowedBook(target);
+      setAvailableBooks(updated);
+      setBorrowedBook({ ...target, available: false, status: "ถูกยืม" });
       setDueDateText(getThaiDueDate());
       setScanStatus("success");
       setCanAutoAdd(false);
@@ -488,10 +539,16 @@ function ScanContent() {
                   <img src={borrowedBook.image} alt={borrowedBook.title} className="w-full h-full object-cover" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <span className="text-[10px] font-mono font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
-                    {borrowedBook.id}
-                  </span>
-                  <h4 className="font-bold text-sm text-slate-900 truncate mt-1">{borrowedBook.title}</h4>
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="text-[10px] font-mono font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                      {borrowedBook.id}
+                    </span>
+                    <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse"></span>
+                      สถานะ: ยืมแล้ว (ไม่ว่าง)
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-sm text-slate-900 truncate mt-0.5">{borrowedBook.title}</h4>
                   <p className="text-xs text-slate-500 truncate">{borrowedBook.author}</p>
                   <p className="text-xs text-emerald-700 font-bold mt-1.5">
                     กำหนดคืน: <span className="underline">{dueDateText}</span>
@@ -651,22 +708,28 @@ function ScanContent() {
                 </div>
               </div>
 
-              {/* Quick Select Available Books */}
+              {/* Quick Select Books */}
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
-                  หรือเลือกหนังสือที่พร้อมให้ยืมในระบบ:
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  หรือเลือกหนังสือจากคลัง:
                 </p>
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                  {availableBooks
-                    .filter((b) => b.available)
-                    .map((book) => (
+                  {availableBooks.map((book) => {
+                    const isAvailable = book.available && book.status !== "ถูกยืม";
+                    return (
                       <div
                         key={book.id}
                         onClick={() => {
-                          setIsManualModalOpen(false);
-                          processBarcode(book.id);
+                          if (isAvailable) {
+                            setIsManualModalOpen(false);
+                            processBarcode(book.id);
+                          }
                         }}
-                        className="flex items-center justify-between p-2.5 bg-slate-50 hover:bg-sky-50 rounded-xl border border-slate-100 hover:border-sky-200 transition-all cursor-pointer group"
+                        className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
+                          isAvailable
+                            ? "bg-slate-50 hover:bg-sky-50 border-slate-100 hover:border-sky-200 cursor-pointer group"
+                            : "bg-slate-100/70 border-slate-200 opacity-60 cursor-not-allowed"
+                        }`}
                       >
                         <div className="flex items-center gap-3 overflow-hidden">
                           <span className="font-mono text-xs font-bold bg-white px-2 py-1 rounded border border-slate-200 text-sky-700">
@@ -676,11 +739,18 @@ function ScanContent() {
                             {book.title}
                           </span>
                         </div>
-                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full shrink-0">
-                          ว่าง
-                        </span>
+                        {isAvailable ? (
+                          <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">
+                            ว่าง (ยืมได้)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full shrink-0">
+                            ถูกยืมแล้ว
+                          </span>
+                        )}
                       </div>
-                    ))}
+                    );
+                  })}
                 </div>
               </div>
 

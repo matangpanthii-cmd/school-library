@@ -2,9 +2,18 @@ import { NextResponse } from "next/server";
 import { getDb, saveDb, BorrowRecord, findBookByAnyCode } from "@/lib/db";
 import { BookItem } from "@/data/initialBooks";
 
-export async function GET() {
+export async function GET(req: Request) {
   const db = getDb();
-  return NextResponse.json({ success: true, borrowed: db.borrowed, history: db.history });
+  return NextResponse.json(
+    { success: true, borrowed: db.borrowed, history: db.history },
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    }
+  );
 }
 
 export async function POST(req: Request) {
@@ -80,8 +89,15 @@ export async function POST(req: Request) {
       success: true,
       message: `ยืมหนังสือ "${book.title}" สำเร็จ!`,
       book,
+      books: db.books,
       borrowRecord: newRecord,
       borrowed: db.borrowed
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      }
     });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error?.message }, { status: 500 });

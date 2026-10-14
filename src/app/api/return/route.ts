@@ -62,8 +62,15 @@ export async function POST(req: Request) {
       success: true,
       message: `คืนหนังสือ ${book?.title ? `"${book.title}" ` : ""}เรียบร้อยแล้ว!`,
       book,
+      books: db.books,
       borrowed: db.borrowed,
       history: db.history
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      }
     });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error?.message }, { status: 500 });

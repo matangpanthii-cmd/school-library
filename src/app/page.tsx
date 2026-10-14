@@ -23,29 +23,42 @@ export default function LibraryDashboard() {
 
   useEffect(() => {
     const fetchBooks = async () => {
+      let serverBooks: BookItem[] | null = null;
       try {
-        const res = await fetch("/api/books");
+        const res = await fetch("/api/books", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
           if (data.books && Array.isArray(data.books) && data.books.length > 0) {
-            setBooks(data.books);
-            try {
-              localStorage.setItem("library_books", JSON.stringify(data.books));
-            } catch (e) {}
-            return;
+            serverBooks = data.books;
           }
         }
       } catch (err) {}
 
+      let merged: BookItem[] = serverBooks || INITIAL_BOOKS;
       try {
         const saved = localStorage.getItem("library_books");
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setBooks(parsed);
+            const localMap = new Map(parsed.map((b: any) => [b.id, b]));
+            merged = merged.map((b) => {
+              const local = localMap.get(b.id);
+              if (local && (!local.available || local.status === "ถูกยืม")) {
+                return { ...b, available: false, status: "ถูกยืม" };
+              }
+              return b;
+            });
+            parsed.forEach((lb: any) => {
+              if (!merged.some((b) => b.id === lb.id)) {
+                merged.unshift(lb);
+              }
+            });
           }
         }
+        localStorage.setItem("library_books", JSON.stringify(merged));
       } catch (e) {}
+
+      setBooks(merged);
     };
     fetchBooks();
   }, []);
