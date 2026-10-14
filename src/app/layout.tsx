@@ -30,14 +30,8 @@ export default function RootLayout({
       </head>
       <body
         suppressHydrationWarning
-        className={`font-sans antialiased bg-[#eef7ff] text-slate-800 min-h-screen flex selection:bg-blue-500 selection:text-white`}
+        className={`font-sans antialiased bg-[#f1f5f9] text-slate-800 min-h-screen flex selection:bg-blue-500 selection:text-white`}
       >
-        {/* Cute Elephant Background Pattern */}
-        <div 
-          className="fixed inset-0 pointer-events-none z-0 opacity-[0.25]" 
-          style={{ backgroundImage: "url('/elephant-bg.jpg')", backgroundSize: '400px', backgroundRepeat: 'repeat' }}
-        ></div>
-        
         <NavigationWrapper>{children}</NavigationWrapper>
       </body>
     </html>

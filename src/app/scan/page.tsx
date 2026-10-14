@@ -17,7 +17,7 @@ import {
   Search, 
   VideoOff, 
   Upload,
-  ExternalLink
+  SwitchCamera
 } from "lucide-react";
 import Link from "next/link";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
@@ -31,6 +31,7 @@ function ScanContent() {
 
   // Scanner States
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isStartingCamera, setIsStartingCamera] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -40,7 +41,7 @@ function ScanContent() {
   const [manualCode, setManualCode] = useState("");
   const [availableBooks, setAvailableBooks] = useState<Book[]>(INITIAL_BOOKS);
 
-  // Helper to load or initialize books (fetch from server API with local fallback)
+  // Load books
   const loadLibraryBooks = async (): Promise<Book[]> => {
     try {
       const res = await fetch("/api/books");
@@ -75,11 +76,10 @@ function ScanContent() {
     return INITIAL_BOOKS;
   };
 
-  // Load available books on mount and check ?borrow= query parameter
   useEffect(() => {
     loadLibraryBooks();
 
-    // Check if URL has ?borrow=B-xxx parameter (e.g. from standard Phone Camera scan)
+    // Check if URL has ?borrow= query param from camera scan
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const borrowCode = params.get("borrow") || params.get("code");
@@ -91,7 +91,6 @@ function ScanContent() {
     }
   }, []);
 
-  // Format Thai Due Date (14 days from now)
   const getThaiDueDate = () => {
     const due = new Date();
     due.setDate(due.getDate() + 14);
@@ -102,10 +101,8 @@ function ScanContent() {
     return `${due.getDate()} ${months[due.getMonth()]} ${due.getFullYear() + 543}`;
   };
 
-  // Extract clean book code from any raw text or URL
   const extractBookCode = (raw: string): string => {
     let clean = raw.trim();
-    // Check if it's a URL like .../scan?borrow=B-001
     if (clean.includes("borrow=")) {
       const parts = clean.split("borrow=");
       clean = parts[1].split("&")[0];
@@ -119,17 +116,15 @@ function ScanContent() {
     return clean.toUpperCase();
   };
 
-  // Process a scanned or entered barcode
   const processBarcode = async (code: string) => {
     if (scanStatus === "processing") return;
     const cleanCode = extractBookCode(code);
     if (!cleanCode) return;
 
     setScanStatus("processing");
-    stopCamera();
+    await stopCamera();
 
     try {
-      // 1. Try real-time server API first
       const res = await fetch("/api/borrow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -141,8 +136,6 @@ function ScanContent() {
         setBorrowedBook(data.book);
         setDueDateText(getThaiDueDate());
         setScanStatus("success");
-
-        // Sync local storage
         await loadLibraryBooks();
         return;
       } else {
@@ -152,7 +145,6 @@ function ScanContent() {
       }
     } catch (apiErr) {
       console.warn("API request failed, falling back to local simulation:", apiErr);
-      // Fallback local logic
       const allBooks = await loadLibraryBooks();
       const target = allBooks.find((b: Book) => b.id.toUpperCase() === cleanCode || b.id.replace("-0", "-00").toUpperCase() === cleanCode);
 
@@ -182,15 +174,12 @@ function ScanContent() {
     }
   };
 
-  // Start Real Camera using Html5Qrcode
+  // Robust Camera Start with Fallbacks
   const startCamera = async () => {
     setCameraError(null);
-    try {
-      const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-      if (!window.isSecureContext && !isLocalhost) {
-        setCameraError("เบราว์เซอร์มือถือจำกัดการเปิดกล้องผ่าน HTTP กรุณาใช้ปุ่ม 'ถ่ายภาพสแกน' ด้านล่างแทนครับ");
-      }
+    setIsStartingCamera(true);
 
+    try {
       if (!html5QrCodeRef.current) {
         html5QrCodeRef.current = new Html5Qrcode("interactive-scanner", {
           formatsToSupport: [
@@ -206,11 +195,33 @@ function ScanContent() {
       }
 
       const qrCode = html5QrCodeRef.current;
+
+      // 1. Try to get available cameras
+      let selectedCameraConfig: any = { facingMode: "environment" };
+      try {
+        const cameras = await Html5Qrcode.getCameras();
+        if (cameras && cameras.length > 0) {
+          // Prefer back camera if available
+          const backCam = cameras.find((c) => 
+            c.label.toLowerCase().includes("back") || 
+            c.label.toLowerCase().includes("rear") || 
+            c.label.toLowerCase().includes("environment")
+          );
+          selectedCameraConfig = backCam ? backCam.id : cameras[0].id;
+        }
+      } catch (camListErr) {
+        console.warn("Could not list cameras, using default constraint:", camListErr);
+      }
+
       await qrCode.start(
-        { facingMode: "environment" },
+        selectedCameraConfig,
         {
-          fps: 10,
-          qrbox: { width: 250, height: 250 }
+          fps: 12,
+          qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const edge = Math.floor(minEdge * 0.7);
+            return { width: Math.max(edge, 200), height: Math.max(edge, 200) };
+          }
         },
         (decodedText) => {
           if (decodedText) {
@@ -222,25 +233,50 @@ function ScanContent() {
 
       setIsCameraActive(true);
     } catch (err: any) {
-      console.warn("Camera start failed:", err);
-      setIsCameraActive(false);
-      setCameraError("ไม่สามารถเปิดกล้องสดได้ กรุณากดปุ่ม 'ถ่ายภาพสแกน' หรือ 'กรอกรหัสเอง' ด้านล่างครับ");
+      console.warn("Primary camera start failed, trying generic fallback:", err);
+
+      // 2. Fallback to generic user-facing or default camera
+      try {
+        if (html5QrCodeRef.current) {
+          await html5QrCodeRef.current.start(
+            { facingMode: "user" },
+            { fps: 10, qrbox: { width: 220, height: 220 } },
+            (decodedText) => {
+              if (decodedText) processBarcode(decodedText);
+            },
+            () => {}
+          );
+          setIsCameraActive(true);
+          setIsStartingCamera(false);
+          return;
+        }
+      } catch (fallbackErr: any) {
+        console.error("All camera start attempts failed:", fallbackErr);
+        setIsCameraActive(false);
+
+        const isLocalhost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+        if (typeof window !== "undefined" && !window.isSecureContext && !isLocalhost) {
+          setCameraError("เบราว์เซอร์จำกัดการเปิดกล้องผ่าน HTTP ครับ เมื่อ Deploy ขึ้น Vercel (HTTPS) จะเปิดกล้องได้ปกติทันที หรือกด 'ถ่ายภาพสแกน' ด้านล่างได้เลยครับ");
+        } else {
+          setCameraError("ไม่สามารถเปิดกล้องได้ กรุณาตรวจสอบว่าได้กดยินยอมให้เบราว์เซอร์เข้าถึงกล้องแล้ว หรือกด 'ถ่ายภาพสแกน' / 'กรอกรหัสเอง' ได้ทันทีครับ");
+        }
+      }
+    } finally {
+      setIsStartingCamera(false);
     }
   };
 
-  // Stop Camera
   const stopCamera = async () => {
     try {
       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
         await html5QrCodeRef.current.stop();
       }
     } catch (e) {
-      console.error("Stop camera error:", e);
+      console.warn("Stop camera warning:", e);
     }
     setIsCameraActive(false);
   };
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
@@ -249,7 +285,6 @@ function ScanContent() {
     };
   }, []);
 
-  // Handle Photo File Scan (Guaranteed to work on ALL mobile browsers even over HTTP)
   const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -293,36 +328,40 @@ function ScanContent() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-4 sm:p-6 lg:p-8 w-full flex-grow flex flex-col items-center justify-center min-h-[calc(100vh-80px)]">
+    <div className="max-w-3xl mx-auto w-full flex flex-col items-center gap-6 pb-12">
       
-      {/* Page Title */}
-      <div className="text-center mb-6">
-        <h1 className="text-3xl font-extrabold text-[#0c4a6e] mb-2 flex items-center justify-center gap-2">
-          <ScanLine className="w-8 h-8 text-sky-500" /> ยืมหนังสือด้วยมือถือ
+      {/* Header Title */}
+      <div className="text-center w-full">
+        <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-sky-100 text-sky-800 text-xs font-bold mb-2">
+          <Sparkles className="w-3.5 h-3.5 text-sky-600" />
+          <span>ระบบยืมหนังสือด้วยตนเอง (Self-Service)</span>
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+          สแกนบาร์โค้ดเพื่อยืมหนังสือ
         </h1>
-        <p className="text-slate-500 font-medium text-sm">
-          สแกนคิวอาร์โค้ดหรือบาร์โค้ดของหนังสือเพื่อทำรายการยืมทันที
+        <p className="text-slate-500 font-medium text-xs sm:text-sm mt-1">
+          เปิดกล้องเพื่อส่องบาร์โค้ด / คิวอาร์โค้ดบนตัวเล่ม หรือเลือกถ่ายภาพจากเครื่อง
         </p>
       </div>
 
-      {/* Camera Guidance Banner */}
+      {/* Camera Guidance / Error Alert */}
       {cameraError && (
-        <div className="w-full max-w-sm mb-4 bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-2xl text-xs font-bold flex flex-col gap-2 animate-[fadeIn_0.2s_ease-out]">
-          <div className="flex items-start justify-between gap-2">
-            <span className="flex items-center gap-1.5">
-              <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
-              {cameraError}
-            </span>
-            <button onClick={() => setCameraError(null)} className="text-amber-500 hover:text-amber-700">
+        <div className="w-full bg-amber-50 border border-amber-200 text-amber-900 p-4 rounded-2xl text-xs sm:text-sm font-medium flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+            <span>{cameraError}</span>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex-1 sm:flex-none px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+            >
+              <Camera className="w-4 h-4" /> ถ่ายภาพสแกน
+            </button>
+            <button onClick={() => setCameraError(null)} className="p-1.5 text-amber-600 hover:bg-amber-100 rounded-lg">
               <X className="w-4 h-4" />
             </button>
           </div>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-          >
-            <Camera className="w-4 h-4" /> แตะเพื่อถ่ายภาพสแกน
-          </button>
         </div>
       )}
 
@@ -336,125 +375,116 @@ function ScanContent() {
         className="hidden"
       />
 
-      {/* Phone Mockup Frame */}
-      <div className="w-full max-w-sm bg-slate-900 rounded-[2.8rem] p-4 pb-7 shadow-2xl relative overflow-hidden border-8 border-slate-800">
+      {/* MAIN SCANNER CARD */}
+      <div className="w-full bg-white rounded-3xl p-4 sm:p-6 shadow-xl border border-slate-200 flex flex-col items-center">
         
-        {/* Top Speaker / Camera Notch */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-36 h-6 bg-slate-800 rounded-b-2xl flex justify-center items-end pb-1 z-30">
-          <div className="w-16 h-1.5 bg-slate-900 rounded-full"></div>
-        </div>
-
         {/* Viewfinder Screen Area */}
-        <div 
-          className="relative w-full aspect-[3/4] bg-slate-950 rounded-3xl overflow-hidden mt-6 flex items-center justify-center select-none"
-        >
+        <div className="relative w-full aspect-[4/3] sm:aspect-video max-h-[420px] bg-slate-950 rounded-2xl overflow-hidden shadow-inner flex items-center justify-center">
+          
           {/* HTML5-QRCode Scanner Container */}
           <div
             id="interactive-scanner"
-            className={`absolute inset-0 w-full h-full z-10 [&_video]:w-full [&_video]:h-full [&_video]:object-cover ${
-              isCameraActive ? "opacity-100" : "opacity-0 pointer-events-none"
-            }`}
+            className="w-full h-full [&_video]:w-full [&_video]:h-full [&_video]:object-cover"
           />
 
-          {/* Fallback Viewfinder Background when camera is off */}
+          {/* VIEW WHEN CAMERA IS OFF & SCANNING */}
           {!isCameraActive && scanStatus === "scanning" && (
-            <div 
-              className="absolute inset-0 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 z-0 flex flex-col items-center justify-center p-6 text-center"
-            >
-              <div 
-                onClick={() => processBarcode("B-001")}
-                className="w-20 h-20 rounded-full bg-sky-500/10 border border-sky-400/20 flex items-center justify-center mb-3 text-sky-400 shadow-lg shadow-sky-500/10 cursor-pointer hover:scale-105 transition-all"
-                title="แตะเพื่อทดสอบยืม B-001"
-              >
-                <ScanLine className="w-10 h-10 animate-pulse" />
-              </div>
-
-              <p className="text-white font-bold text-sm">พร้อมสแกนหนังสือ</p>
-              <p className="text-slate-400 text-xs mt-1 mb-4">กดปุ่มสีส้มด้านล่างเพื่อถ่ายภาพ หรือแตะเล่มเพื่อทดสอบ</p>
-
+            <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-blue-950 z-10 flex flex-col items-center justify-center p-6 text-center">
+              
               <button
-                onClick={() => setIsManualModalOpen(true)}
-                className="px-4 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-400/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                onClick={startCamera}
+                disabled={isStartingCamera}
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-sky-500 hover:bg-sky-400 text-white flex flex-col items-center justify-center shadow-lg shadow-sky-500/30 hover:scale-105 active:scale-95 transition-all cursor-pointer group mb-4"
               >
-                <BookOpen className="w-3.5 h-3.5" /> เลือกหนังสือทดลองยืม
+                {isStartingCamera ? (
+                  <RefreshCw className="w-8 h-8 animate-spin" />
+                ) : (
+                  <>
+                    <Camera className="w-8 h-8 sm:w-9 sm:h-9 group-hover:scale-110 transition-transform" />
+                    <span className="text-[10px] font-bold mt-1">แตะเพื่อเปิด</span>
+                  </>
+                )}
               </button>
+
+              <h3 className="text-white font-bold text-base sm:text-lg">
+                {isStartingCamera ? "กำลังเชื่อมต่อกล้อง..." : "กล้องยังไม่เปิดทำงาน"}
+              </h3>
+              <p className="text-slate-400 text-xs mt-1 max-w-sm">
+                กดปุ่มสีฟ้าด้านบนเพื่อเปิดกล้อง หรือใช้ปุ่มถ่ายภาพ / กรอกรหัสหนังสือด้านล่าง
+              </p>
             </div>
           )}
 
-          {/* SCANNING STATE OVERLAY */}
-          {scanStatus === "scanning" && (
-            <>
-              {/* Corner Markers */}
-              <div className="absolute top-8 left-8 w-12 h-12 border-t-4 border-l-4 border-sky-400 rounded-tl-2xl z-20 pointer-events-none"></div>
-              <div className="absolute top-8 right-8 w-12 h-12 border-t-4 border-r-4 border-sky-400 rounded-tr-2xl z-20 pointer-events-none"></div>
-              <div className="absolute bottom-8 left-8 w-12 h-12 border-b-4 border-l-4 border-sky-400 rounded-bl-2xl z-20 pointer-events-none"></div>
-              <div className="absolute bottom-8 right-8 w-12 h-12 border-b-4 border-r-4 border-sky-400 rounded-br-2xl z-20 pointer-events-none"></div>
-              
-              {/* Animated Laser Scanning Line */}
-              <div className="absolute top-8 left-8 right-8 h-1 bg-sky-400 shadow-[0_0_15px_4px_rgba(56,189,248,0.7)] z-20 animate-[bounce_3s_infinite_ease-in-out] pointer-events-none"></div>
-              
-              {/* Instruction Text */}
-              <div className="absolute bottom-4 left-0 right-0 text-center text-white/90 text-xs flex flex-col items-center gap-1.5 z-20 pointer-events-none">
-                <div className="bg-black/60 backdrop-blur-md px-3.5 py-1.5 rounded-full flex items-center gap-2 border border-white/10">
-                  <Camera className="w-3.5 h-3.5 text-sky-400" />
-                  <span>ส่องบาร์โค้ดหรือคิวอาร์โค้ด</span>
-                </div>
+          {/* SCANNING LASER & CORNERS (Active Camera) */}
+          {isCameraActive && scanStatus === "scanning" && (
+            <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
+              {/* Target Focus Box */}
+              <div className="relative w-64 h-64 border-2 border-sky-400/40 rounded-2xl">
+                {/* 4 Corners */}
+                <div className="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-sky-400 rounded-tl-lg"></div>
+                <div className="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-sky-400 rounded-tr-lg"></div>
+                <div className="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-sky-400 rounded-bl-lg"></div>
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-sky-400 rounded-br-lg"></div>
+
+                {/* Animated Scan Line */}
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-sky-400 shadow-[0_0_12px_3px_rgba(56,189,248,0.8)] animate-[bounce_2.5s_infinite_ease-in-out]"></div>
               </div>
-            </>
+
+              {/* Status pill at bottom */}
+              <div className="absolute bottom-4 bg-black/60 backdrop-blur-md px-4 py-1.5 rounded-full text-white text-xs font-semibold flex items-center gap-2 border border-white/10">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></div>
+                <span>กำลังตรวจจับบาร์โค้ดอัตโนมัติ...</span>
+              </div>
+            </div>
           )}
 
           {/* PROCESSING STATE */}
           {scanStatus === "processing" && (
-            <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center gap-4 animate-pulse">
-              <div className="w-16 h-16 border-4 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-white font-bold text-sm">กำลังตรวจสอบข้อมูลหนังสือ...</p>
+            <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center gap-3">
+              <div className="w-14 h-14 border-4 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-white font-bold text-sm">กำลังบันทึกรายการยืมหนังสือ...</p>
             </div>
           )}
 
           {/* SUCCESS STATE */}
           {scanStatus === "success" && borrowedBook && (
-            <div className="absolute inset-0 bg-emerald-600 z-30 flex flex-col items-center justify-between p-6 text-center text-white animate-[fadeIn_0.3s_ease-out]">
-              <div className="flex flex-col items-center mt-2">
-                <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-3 shadow-inner">
-                  <CheckCircle2 className="w-10 h-10 text-white" />
-                </div>
-                <h3 className="text-2xl font-black">ยืมสำเร็จแล้ว</h3>
-                <p className="text-emerald-100 text-xs mt-1">บันทึกข้อมูลเข้าสู่บัญชีของคุณเรียบร้อย</p>
+            <div className="absolute inset-0 bg-emerald-600 z-30 flex flex-col items-center justify-center p-6 text-center text-white animate-[fadeIn_0.3s_ease-out]">
+              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-2">
+                <CheckCircle2 className="w-9 h-9 text-white" />
               </div>
+              <h3 className="text-2xl font-black">ยืมหนังสือสำเร็จ!</h3>
+              <p className="text-emerald-100 text-xs mb-4">ระบบบันทึกรายการยืมเข้าบัญชีของคุณเรียบร้อยแล้ว</p>
 
-              {/* Book Info Card */}
-              <div className="bg-white text-slate-800 rounded-2xl p-4 w-full shadow-2xl text-left border border-white/20">
-                <div className="flex gap-3 items-center">
-                  <div className="w-14 h-18 bg-slate-100 rounded-lg overflow-hidden shrink-0 border border-slate-200">
-                    <img src={borrowedBook.image} alt="Book" className="w-full h-full object-cover" />
-                  </div>
-                  <div className="overflow-hidden">
-                    <span className="text-[10px] font-mono font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded">
-                      {borrowedBook.id}
-                    </span>
-                    <h4 className="font-bold text-sm text-slate-800 truncate mt-1">{borrowedBook.title}</h4>
-                    <p className="text-[11px] text-slate-500 truncate">{borrowedBook.author}</p>
-                  </div>
+              {/* Book Details Box */}
+              <div className="bg-white text-slate-800 rounded-2xl p-4 w-full max-w-sm shadow-xl text-left flex gap-3.5 items-center">
+                <div className="w-14 h-20 bg-slate-100 rounded-lg overflow-hidden shrink-0 border border-slate-200 shadow-sm">
+                  <img src={borrowedBook.image} alt={borrowedBook.title} className="w-full h-full object-cover" />
                 </div>
-
-                <div className="mt-3 pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
-                  <span className="text-slate-400 font-medium">กำหนดส่งคืน:</span>
-                  <span className="font-bold text-emerald-700">{dueDateText}</span>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] font-mono font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                    {borrowedBook.id}
+                  </span>
+                  <h4 className="font-bold text-sm text-slate-900 truncate mt-1">{borrowedBook.title}</h4>
+                  <p className="text-xs text-slate-500 truncate">{borrowedBook.author}</p>
+                  <p className="text-xs text-emerald-700 font-bold mt-1.5">
+                    กำหนดคืน: <span className="underline">{dueDateText}</span>
+                  </p>
                 </div>
               </div>
 
-              <div className="flex flex-col gap-2 w-full">
+              <div className="flex gap-3 w-full max-w-sm mt-5">
                 <button 
                   onClick={resetScan}
-                  className="w-full py-3 bg-white text-emerald-700 font-bold text-xs rounded-xl hover:bg-emerald-50 transition-colors shadow-sm cursor-pointer"
+                  className="flex-1 py-2.5 bg-white text-emerald-800 font-bold text-xs rounded-xl hover:bg-emerald-50 transition-colors shadow-sm cursor-pointer"
                 >
                   สแกนเล่มต่อไป
                 </button>
                 <Link
                   href="/my-books"
-                  className="w-full py-2.5 bg-emerald-700/60 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-colors text-center"
+                  className="flex-1 py-2.5 bg-emerald-800/60 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl transition-colors text-center flex items-center justify-center gap-1"
                 >
-                  ดูหนังสือของฉัน →
+                  <span>ดูหนังสือฉัน</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </div>
             </div>
@@ -463,15 +493,15 @@ function ScanContent() {
           {/* ERROR STATE */}
           {scanStatus === "error" && (
             <div className="absolute inset-0 bg-rose-600 z-30 flex flex-col items-center justify-center p-6 text-center text-white animate-[fadeIn_0.3s_ease-out]">
-              <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mb-3">
-                <AlertCircle className="w-10 h-10 text-white" />
+              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-3">
+                <AlertCircle className="w-8 h-8 text-white" />
               </div>
               <h3 className="text-xl font-black mb-1">ไม่สามารถทำรายการได้</h3>
-              <p className="text-rose-100 text-xs mb-6 max-w-xs">{statusMessage}</p>
+              <p className="text-rose-100 text-xs sm:text-sm mb-5 max-w-sm">{statusMessage}</p>
 
               <button 
                 onClick={resetScan}
-                className="px-6 py-2.5 bg-white text-rose-700 font-bold text-xs rounded-full hover:bg-rose-50 transition-colors shadow-sm cursor-pointer"
+                className="px-6 py-2.5 bg-white text-rose-700 font-bold text-xs rounded-xl hover:bg-rose-50 transition-colors shadow-sm cursor-pointer"
               >
                 ลองใหม่อีกครั้ง
               </button>
@@ -480,59 +510,39 @@ function ScanContent() {
 
         </div>
 
-        {/* Action Controls Toolbar */}
-        <div className="flex justify-between items-center mt-5 px-1">
+        {/* CONTROLS TOOLBAR (Clean, Large, Easy to tap) */}
+        <div className="grid grid-cols-3 gap-3 w-full mt-5">
           
           {/* Toggle Live Camera */}
           <button 
             onClick={isCameraActive ? stopCamera : startCamera}
-            className={`flex flex-col items-center gap-1.5 transition-colors cursor-pointer ${
-              isCameraActive ? "text-sky-400" : "text-slate-400 hover:text-white"
+            className={`py-3.5 px-3 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm ${
+              isCameraActive 
+                ? "bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100" 
+                : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/20"
             }`}
           >
-            <div className={`p-3 rounded-full transition-all ${
-              isCameraActive ? "bg-sky-500/20 ring-2 ring-sky-400" : "bg-slate-800"
-            }`}>
-              {isCameraActive ? <VideoOff className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
-            </div>
-            <span className="text-[10px] font-bold whitespace-nowrap">
-              {isCameraActive ? "ปิดกล้อง" : "เปิดกล้องสด"}
-            </span>
+            {isCameraActive ? <VideoOff className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
+            <span className="whitespace-nowrap">{isCameraActive ? "ปิดกล้อง" : "เปิดกล้องสด"}</span>
           </button>
 
-          {/* Take Photo Scan (Always works on all phones over HTTP) */}
+          {/* Take Photo Scan */}
           <button 
             onClick={() => fileInputRef.current?.click()}
-            className="flex flex-col items-center gap-1.5 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+            className="py-3.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
           >
-            <div className="p-3 bg-amber-500/20 ring-2 ring-amber-400/40 rounded-full">
-              <Upload className="w-5 h-5" />
-            </div>
-            <span className="text-[10px] font-bold whitespace-nowrap">ถ่ายภาพสแกน</span>
+            <Upload className="w-5 h-5 text-amber-600" />
+            <span className="whitespace-nowrap">ถ่ายภาพ / อัปโหลด</span>
           </button>
 
           {/* Manual Input */}
           <button 
             onClick={() => setIsManualModalOpen(true)}
-            className="flex flex-col items-center gap-1.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            className="py-3.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-2xl font-bold text-xs flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm"
           >
-            <div className="p-3 bg-slate-800 rounded-full">
-              <FileDigit className="w-5 h-5" />
-            </div>
-            <span className="text-[10px] font-bold whitespace-nowrap">กรอกรหัสเอง</span>
+            <FileDigit className="w-5 h-5 text-slate-600" />
+            <span className="whitespace-nowrap">พิมพ์รหัสเอง</span>
           </button>
-
-          {/* Cancel */}
-          <Link 
-            href="/search"
-            onClick={stopCamera}
-            className="flex flex-col items-center gap-1.5 text-slate-400 hover:text-white transition-colors"
-          >
-            <div className="p-3 bg-slate-800 rounded-full">
-              <X className="w-5 h-5" />
-            </div>
-            <span className="text-[10px] font-bold whitespace-nowrap">กลับคลัง</span>
-          </Link>
         </div>
 
       </div>
@@ -558,7 +568,7 @@ function ScanContent() {
             <div className="p-6 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  ระบุรหัสหนังสือ (Barcode ID)
+                  ระบุรหัสหนังสือ (เช่น B-001)
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -575,7 +585,7 @@ function ScanContent() {
                         processBarcode(manualCode.trim());
                       }
                     }}
-                    className="px-5 py-2.5 bg-sky-500 hover:bg-sky-600 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer"
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer"
                   >
                     ยืมเล่มนี้
                   </button>
