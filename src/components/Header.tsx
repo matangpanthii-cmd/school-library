@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, Bell, Menu } from "lucide-react";
+import { Search, Bell, Menu, LogOut } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Sidebar from "./Sidebar";
@@ -53,29 +53,15 @@ export default function Header() {
 
         {/* Right Actions */}
         <div className="flex items-center gap-3 ml-auto">
-          {role === "admin" ? (
+          {role === "admin" && (
             <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold border border-amber-200">
               โหมดแอดมิน (Admin)
             </span>
-          ) : (
-            <button
-              onClick={() => router.push("/login")}
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 transition-colors"
-            >
-              เข้าสู่ระบบเจ้าหน้าที่
-            </button>
           )}
-
-          <button className="relative p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-          </button>
-          
-          <div className="h-8 w-px bg-slate-200 hidden sm:block"></div>
 
           <div 
             onClick={() => router.push(role === "admin" ? "/admin/profile" : "/profile")}
-            className="flex items-center gap-3 cursor-pointer hover:bg-slate-50 p-1.5 rounded-lg transition-colors"
+            className="flex items-center gap-2.5 cursor-pointer hover:bg-slate-50 p-1.5 rounded-xl transition-colors"
           >
             <div className="w-8 h-8 rounded-full bg-white overflow-hidden shadow-sm border border-slate-200">
                <img 
@@ -85,14 +71,27 @@ export default function Header() {
                />
             </div>
             <div className="hidden sm:block text-left">
-              <p className="text-sm font-bold text-slate-800 leading-none whitespace-nowrap">
-                {role === "admin" ? "ครูปัณฑิตา คำพัด" : "บุคคลทั่วไป / นักเรียน"}
+              <p className="text-xs font-bold text-slate-800 leading-none whitespace-nowrap">
+                {role === "admin" ? "ครูปัณฑิตา (แอดมิน)" : "ด.ญ. แมนนะ (นักเรียน)"}
               </p>
-              <p className="text-[10px] text-slate-500 mt-1 whitespace-nowrap">
-                {role === "admin" ? "บรรณารักษ์ (แอดมิน)" : "ห้องสมุดอนุบาลช้างน้อย"}
+              <p className="text-[10px] text-slate-400 mt-1 whitespace-nowrap">
+                {role === "admin" ? "บรรณารักษ์ / จัดการคลัง" : "รหัส: U-1002"}
               </p>
             </div>
           </div>
+
+          <div className="h-6 w-px bg-slate-200"></div>
+
+          <button
+            onClick={() => {
+              localStorage.clear();
+              router.push("/login");
+            }}
+            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+            title="ออกจากระบบ"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </header>
 

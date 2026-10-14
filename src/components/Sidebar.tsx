@@ -55,8 +55,10 @@ export default function Sidebar({ className = "" }: { className?: string }) {
   const handleLogout = () => {
     localStorage.removeItem("appRole");
     localStorage.removeItem("userRole");
+    localStorage.removeItem("currentUserId");
+    localStorage.removeItem("currentUserName");
     setRole("student");
-    router.push("/");
+    router.push("/login");
   };
 
   const isAdmin = role === "admin";
@@ -222,13 +224,13 @@ export default function Sidebar({ className = "" }: { className?: string }) {
             </button>
           </>
         ) : (
-          <Link
-            href="/login"
-            className="flex items-center justify-center gap-2 px-3 py-2.5 w-full bg-blue-900/60 hover:bg-blue-800 text-sky-200 hover:text-white rounded-xl transition-all text-xs font-bold border border-blue-700/50 cursor-pointer"
+          <button
+            onClick={handleLogout}
+            className="flex items-center justify-center gap-2 px-3 py-2.5 w-full bg-blue-900/60 hover:bg-rose-950/40 text-sky-200 hover:text-rose-200 rounded-xl transition-all text-xs font-bold border border-blue-700/50 cursor-pointer"
           >
-            <ShieldCheck className="w-4 h-4 text-amber-400" />
-            <span>สำหรับเจ้าหน้าที่ / คุณครู</span>
-          </Link>
+            <LogOut className="w-4 h-4" />
+            <span>ออกจากระบบ</span>
+          </button>
         )}
       </div>
 

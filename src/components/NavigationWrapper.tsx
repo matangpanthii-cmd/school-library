@@ -1,21 +1,47 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
 
 export default function NavigationWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isLoginPage = pathname === "/login";
+  const router = useRouter();
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
-  if (isLoginPage) {
+  useEffect(() => {
+    const role = localStorage.getItem("appRole") || localStorage.getItem("userRole");
+    if (!role) {
+      setIsAuthenticated(false);
+      if (pathname !== "/login") {
+        router.replace("/login");
+      }
+    } else {
+      setIsAuthenticated(true);
+    }
+  }, [pathname, router]);
+
+  if (pathname === "/login") {
     return <main className="w-full min-h-screen">{children}</main>;
+  }
+
+  // While checking or if unauthenticated, redirect smoothly to /login
+  if (isAuthenticated === false) {
+    return (
+      <div className="w-full min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-xs font-bold text-slate-500">กำลังเปิดหน้าระบบ...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
     <>
-      {/* Left Sidebar - Always in its original place on the left */}
+      {/* Left Sidebar - For desktop */}
       <Sidebar className="hidden md:flex z-10" />
 
       {/* Main Content Area with Header at top */}
