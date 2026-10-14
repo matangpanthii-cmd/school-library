@@ -298,19 +298,8 @@ function ScanContent() {
         if (selectedCameraId) {
           targetConfig = selectedCameraId;
         } else if (facingMode === "environment") {
-          // Look for an explicit back/rear camera in labels
-          const backCam = detectedCameras.find((c) => {
-            const lbl = (c.label || "").toLowerCase();
-            return (
-              lbl.includes("back") ||
-              lbl.includes("rear") ||
-              lbl.includes("environment") ||
-              lbl.includes("หลัง")
-            );
-          });
-          // CRITICAL: If no backCam found by label (e.g. blank labels before permission),
-          // DO NOT default to detectedCameras[0]! Keep { facingMode: "environment" }!
-          targetConfig = backCam ? backCam.id : { facingMode: "environment" };
+          // Standard W3C constraint for rear autofocus camera
+          targetConfig = { facingMode: "environment" };
         } else {
           targetConfig = { facingMode: "user" };
         }
@@ -325,7 +314,6 @@ function ScanContent() {
             const edge = Math.floor(minEdge * 0.72);
             return { width: Math.max(edge, 220), height: Math.max(edge, 220) };
           },
-          aspectRatio: 1.0,
         },
         (decodedText) => {
           if (decodedText) {
