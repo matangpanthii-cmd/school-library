@@ -1,0 +1,24 @@
+{
+  "name": "School Library - โรงเรียนอนุบาลช้างน้อย",
+  "short_name": "ห้องสมุดช้างน้อย",
+  "description": "ระบบยืม-คืนหนังสือโรงเรียนอนุบาลช้างน้อย ใช้งานได้ทั้งคอมพิวเตอร์และมือถือ",
+  "start_url": "/login",
+  "display": "standalone",
+  "background_color": "#eef7ff",
+  "theme_color": "#0284c7",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/hero-elephant.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/hero-elephant.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}
