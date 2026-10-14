@@ -33,46 +33,129 @@ function Barcode({ value }: { value: string }) {
 
 export default function ProfilePage() {
   const [userRole, setUserRole] = useState<"student" | "teacher">("student");
+  const [userName, setUserName] = useState("ด.ญ. แมนนะ น่ารัก");
+  const [userId, setUserId] = useState("U-1002");
+  const [borrowedCount, setBorrowedCount] = useState(2);
+  const [historyList, setHistoryList] = useState<Array<{
+    id: string;
+    title: string;
+    borrowDate: string;
+    dueDate: string;
+    status: "Active" | "Returned";
+  }>>([
+    { id: "B-0001", title: "แฮร์รี่ พอตเตอร์ กับศิลาอาถรรพ์", borrowDate: "01 ต.ค. 2568", dueDate: "08 ต.ค. 2568", status: "Returned" },
+    { id: "B-0003", title: "หลักการเขียนโปรแกรมเบื้องต้น", borrowDate: "05 ต.ค. 2568", dueDate: "19 ต.ค. 2568", status: "Active" },
+    { id: "B-0004", title: "ประวัติศาสตร์ไทย 101", borrowDate: "07 ต.ค. 2568", dueDate: "21 ต.ค. 2568", status: "Active" },
+  ]);
 
   useEffect(() => {
     const role = localStorage.getItem('appRole') || localStorage.getItem('userRole');
-    if (role === 'admin') {
-      setUserRole('teacher');
+    const isTeacher = role === 'admin';
+    setUserRole(isTeacher ? 'teacher' : 'student');
+
+    const savedName = localStorage.getItem('currentUserName');
+    if (savedName) {
+      setUserName(savedName);
     } else {
-      setUserRole('student');
+      setUserName(isTeacher ? 'ครูปัณฑิตา คำพัด (บรรณารักษ์)' : 'ด.ญ. แมนนะ น่ารัก');
     }
+
+    const savedId = localStorage.getItem('currentUserId');
+    if (savedId) {
+      setUserId(savedId);
+    } else {
+      setUserId(isTeacher ? 'U-2001' : 'U-1002');
+    }
+
+    // Load dynamic real-time borrowing data
+    const loadRealtimeHistory = async () => {
+      let activeList: any[] = [];
+      let pastList: any[] = [];
+
+      try {
+        const res = await fetch("/api/borrow", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.borrowed) && data.borrowed.length > 0) activeList = data.borrowed;
+          if (Array.isArray(data.history) && data.history.length > 0) pastList = data.history;
+        }
+      } catch (e) {
+        console.warn("Using local cache for profile:", e);
+      }
+
+      try {
+        const savedActive = localStorage.getItem("my_borrowed_books");
+        if (savedActive) {
+          const parsed = JSON.parse(savedActive);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const map = new Map(activeList.map((b) => [String(b.bookId || b.id), b]));
+            parsed.forEach((b) => map.set(String(b.bookId || b.id), b));
+            activeList = Array.from(map.values());
+          }
+        }
+
+        const savedPast = localStorage.getItem("my_borrowed_history");
+        if (savedPast) {
+          const parsedH = JSON.parse(savedPast);
+          if (Array.isArray(parsedH) && parsedH.length > 0) {
+            const mapH = new Map(pastList.map((b) => [String(b.id), b]));
+            parsedH.forEach((b) => mapH.set(String(b.id), b));
+            pastList = Array.from(mapH.values());
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+
+      if (activeList.length > 0 || pastList.length > 0) {
+        const combined = [
+          ...activeList.map((b) => ({
+            id: String(b.bookId || (typeof b.id === "string" ? b.id : `B-000${b.id}`)),
+            title: b.title,
+            borrowDate: b.borrowDate || "ล่าสุด",
+            dueDate: b.dueDate || "14 วัน",
+            status: "Active" as const
+          })),
+          ...pastList.map((b) => ({
+            id: String(b.bookId || (typeof b.id === "string" ? b.id : `B-000${b.id}`)),
+            title: b.title,
+            borrowDate: b.borrowDate || "ก่อนหน้า",
+            dueDate: b.returnDate || b.dueDate || "คืนแล้ว",
+            status: "Returned" as const
+          }))
+        ];
+        setHistoryList(combined);
+        setBorrowedCount(activeList.length);
+      }
+    };
+
+    loadRealtimeHistory();
   }, []);
 
   const mockStudent = {
-    id: "U-1001",
-    name: "เด็กหญิงแมนนะ",
+    id: userId,
+    name: userName,
     role: "student",
     room: "ม.3/1",
-    studentId: "640123",
-    borrowed: 2,
+    studentId: userId === "U-1002" ? "640124" : userId.replace("U-", "64"),
+    borrowed: borrowedCount,
     limit: 3,
     fines: 0,
     avatar: "/avatar_student.jpg",
-    history: [
-      { id: "B-0001", title: "แฮร์รี่ พอตเตอร์ กับศิลาอาถรรพ์", borrowDate: "2024-10-01", dueDate: "2024-10-08", status: "Returned" },
-      { id: "B-0003", title: "หลักการเขียนโปรแกรมเบื้องต้น", borrowDate: "2024-10-05", dueDate: "2024-10-12", status: "Active" },
-      { id: "B-0004", title: "ประวัติศาสตร์ไทย 101", borrowDate: "2024-10-07", dueDate: "2024-10-14", status: "Active" },
-    ]
+    history: historyList
   };
 
   const mockTeacher = {
-    id: "U-2001",
-    name: "ครูปัณฑิตา คำพัด",
+    id: userId,
+    name: userName,
     role: "teacher",
-    department: "คอมพิวเตอร์",
-    teacherId: "T-8899",
-    borrowed: 1,
+    department: "คอมพิวเตอร์และสารสนเทศ",
+    teacherId: userId === "U-2001" ? "T-8899" : userId,
+    borrowed: borrowedCount,
     limit: 10,
     fines: 0,
     avatar: "/avatar_teacher.jpg",
-    history: [
-      { id: "B-0005", title: "การสอนคอมพิวเตอร์พื้นฐาน", borrowDate: "2024-09-20", dueDate: "2024-10-20", status: "Active" },
-    ]
+    history: historyList
   };
 
   const user = userRole === "student" ? mockStudent : mockTeacher;
