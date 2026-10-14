@@ -20,6 +20,7 @@ import {
   Copy,
   ExternalLink,
   ShieldCheck,
+  ShieldAlert,
   CheckCircle2
 } from "lucide-react";
 import Barcode from "@/components/Barcode";
@@ -50,6 +51,7 @@ export default function AdminBooksPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"latest" | "title" | "pages">("latest");
   const [selectedBook, setSelectedBook] = useState<BookItem | null>(null);
+  const [role, setRole] = useState<"admin" | "student" | null>(null);
 
   // Modal State for Add / Edit Book
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -88,8 +90,11 @@ export default function AdminBooksPage() {
     return bookId;
   };
 
-  // Load books
+  // Load books & check role
   useEffect(() => {
+    const savedRole = localStorage.getItem("appRole") || localStorage.getItem("userRole");
+    setRole(savedRole === "admin" ? "admin" : "student");
+
     const fetchBooks = async () => {
       try {
         const res = await fetch("/api/books");
@@ -249,6 +254,34 @@ export default function AdminBooksPage() {
     if (sortBy === "pages") return b.pages - a.pages;
     return 0;
   });
+
+  if (role === "student") {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8 bg-white rounded-3xl border border-slate-200 shadow-sm max-w-xl mx-auto my-10">
+        <div className="w-20 h-20 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+          <ShieldAlert className="w-10 h-10" />
+        </div>
+        <h2 className="text-2xl font-bold text-slate-800 mb-2">หน้าระบบหลังบ้านสำหรับเจ้าหน้าที่เท่านั้น</h2>
+        <p className="text-slate-500 max-w-md mb-6 text-sm">
+          การจัดการคลังหนังสือและพิมพ์บาร์โค้ดสงวนไว้สำหรับคุณครูและบรรณารักษ์ครับ
+        </p>
+        <div className="flex gap-3">
+          <Link
+            href="/"
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md transition-all text-sm"
+          >
+            กลับหน้าแรกห้องสมุด
+          </Link>
+          <Link
+            href="/login"
+            className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-md transition-all text-sm"
+          >
+            เข้าสู่ระบบแอดมิน
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 w-full h-full pb-10 relative">

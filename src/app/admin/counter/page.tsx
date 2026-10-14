@@ -53,7 +53,7 @@ export default function AdminCounterPage() {
 
   useEffect(() => {
     const saved = localStorage.getItem("appRole") || localStorage.getItem("userRole");
-    setRole(saved === "student" ? "student" : "admin");
+    setRole(saved === "admin" ? "admin" : "student");
   }, []);
 
   // Load saved books from server API or localStorage on mount

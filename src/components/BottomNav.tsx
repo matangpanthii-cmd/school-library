@@ -7,14 +7,16 @@ import { Home, Search, ScanLine, BookOpen, Users, ArrowRightLeft, Bookmark, File
 
 export default function BottomNav() {
   const pathname = usePathname();
-  const [role, setRole] = useState<"admin" | "student">("admin");
+  const [role, setRole] = useState<"admin" | "student">("student");
 
   useEffect(() => {
     const savedRole = localStorage.getItem("appRole") || localStorage.getItem("userRole");
-    if (savedRole === "student" || savedRole === "admin") {
-      setRole(savedRole as "admin" | "student");
+    if (savedRole === "admin") {
+      setRole("admin");
+    } else {
+      setRole("student");
     }
-  }, []);
+  }, [pathname]);
 
   const adminTabs = [
     { name: "แดชบอร์ด", icon: Home, href: "/admin" },

@@ -8,7 +8,7 @@ import Sidebar from "./Sidebar";
 export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalQuery, setGlobalQuery] = useState("");
-  const [role, setRole] = useState<"admin" | "student">("admin");
+  const [role, setRole] = useState<"admin" | "student">("student");
   const router = useRouter();
 
   const handleGlobalSearch = (e: React.FormEvent) => {
@@ -20,8 +20,10 @@ export default function Header() {
 
   useEffect(() => {
     const saved = localStorage.getItem("appRole") || localStorage.getItem("userRole");
-    if (saved === "student" || saved === "admin") {
-      setRole(saved as "admin" | "student");
+    if (saved === "admin") {
+      setRole("admin");
+    } else {
+      setRole("student");
     }
   }, []);
 
@@ -50,7 +52,20 @@ export default function Header() {
         </form>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-4 ml-auto">
+        <div className="flex items-center gap-3 ml-auto">
+          {role === "admin" ? (
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold border border-amber-200">
+              โหมดแอดมิน (Admin)
+            </span>
+          ) : (
+            <button
+              onClick={() => router.push("/login")}
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 transition-colors"
+            >
+              เข้าสู่ระบบเจ้าหน้าที่
+            </button>
+          )}
+
           <button className="relative p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
             <Bell className="w-5 h-5" />
             <span className="absolute top-1.5 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
@@ -59,7 +74,7 @@ export default function Header() {
           <div className="h-8 w-px bg-slate-200 hidden sm:block"></div>
 
           <div 
-            onClick={() => router.push("/profile")}
+            onClick={() => router.push(role === "admin" ? "/admin/profile" : "/profile")}
             className="flex items-center gap-3 cursor-pointer hover:bg-slate-50 p-1.5 rounded-lg transition-colors"
           >
             <div className="w-8 h-8 rounded-full bg-white overflow-hidden shadow-sm border border-slate-200">
@@ -69,12 +84,12 @@ export default function Header() {
                  className="w-full h-full object-cover" 
                />
             </div>
-            <div className="hidden sm:block">
+            <div className="hidden sm:block text-left">
               <p className="text-sm font-bold text-slate-800 leading-none whitespace-nowrap">
-                {role === "admin" ? "ครูปัณฑิตา คำพัด" : "ด.ญ. แมนนะ น่ารัก"}
+                {role === "admin" ? "ครูปัณฑิตา คำพัด" : "บุคคลทั่วไป / นักเรียน"}
               </p>
               <p className="text-[10px] text-slate-500 mt-1 whitespace-nowrap">
-                {role === "admin" ? "บรรณารักษ์ / เจ้าหน้าที่" : "นักเรียน ป.6/2"}
+                {role === "admin" ? "บรรณารักษ์ (แอดมิน)" : "ห้องสมุดอนุบาลช้างน้อย"}
               </p>
             </div>
           </div>

@@ -31,10 +31,10 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const savedRole = localStorage.getItem("appRole") || localStorage.getItem("userRole");
-    if (savedRole === "student") {
-      setRole("student");
-    } else {
+    if (savedRole === "admin") {
       setRole("admin");
+    } else {
+      setRole("student");
     }
 
     const fetchBooks = async () => {

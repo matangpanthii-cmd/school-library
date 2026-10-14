@@ -144,7 +144,7 @@ export default function LibraryDashboard() {
           </div>
         </Link>
 
-        <Link href="/admin/counter" className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow-md hover:border-amber-200 transition-all group">
+        <Link href="/my-books" className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow-md hover:border-amber-200 transition-all group">
           <div className="w-12 h-12 rounded-xl bg-amber-100 flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform shrink-0">
             <BookmarkCheck className="w-6 h-6" />
           </div>

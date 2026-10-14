@@ -24,7 +24,7 @@ export default function AdminStatsPage() {
   useEffect(() => {
     setPrintDate(new Date().toLocaleDateString("th-TH"));
     const savedRole = localStorage.getItem("appRole") || localStorage.getItem("userRole");
-    setRole(savedRole === "student" ? "student" : "admin");
+    setRole(savedRole === "admin" ? "admin" : "student");
 
     const fetchBooks = async () => {
       try {
